@@ -1,27 +1,107 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate, useParams } from "react-router"
+import { AxiosError } from "axios"
+import { z, ZodError } from "zod"
+
+import { api } from "../services/api"
+
 import { CATEGORIES, CATEGORIES_KEYS } from "../utils/categories"
 import fileSvg from "../assets/file.svg"
 import { Input } from "../components/Input"
 import { Select } from "../components/Select"
 import { Upload } from "../components/Upload"
 import { Button } from "../components/Button"
+import { formatCurrency } from "../utils/formatCurrency"
+
+const refundSchema = z.object({
+    name:z.string().min(3,{message:"Informe um nome claro para sua solicitação"}),
+    category:z.string().min(1,{message:"Informe a categoria"}),
+    amount:z.coerce.number({message:"Informe um valor válido"}).positive({message:"Informe um valor válido e superior a 0"})
+
+})
 export function Refund(){
-    const [filename, setFilename] = useState<File | null>(null)
+    const [file, setFile] = useState<File | null>(null)
     const [name, setName] = useState("")
     const [amount, setAmount] = useState("")
     const [category, setCategory] = useState("")
     const [isLoading, setIsLoading] = useState(false)
+    const [fileURL, setFileURL] = useState<string | null>(null)
+
     const navigate = useNavigate()
-    const params = useParams<{id:string}>()
-    function onSubmit(event: React.FormEvent){
+      const params = useParams<{id:string}>()
+
+    async function onSubmit(event: React.FormEvent){
         event.preventDefault()
+
         if(params.id){
            return navigate(-1)
         }
-        alert("Solicitação de reembolso enviada com sucesso!")
-        navigate("/confirm",{state:{fromSubmit:true}})
+
+        try {
+            setIsLoading(true)
+
+            if(!file){
+                return alert("Selecione um arquivo de comprovante")
+            }
+
+            const fileUploadForm = new FormData()
+            fileUploadForm.append("file", file)
+
+            const response = await api.post("/uploads", fileUploadForm)
+
+            const data = refundSchema.parse({
+                name,
+                category,
+                amount: amount.replace(",",".")
+            })
+           
+            await api.post("/refunds", { ...data, filename: response.data.filename })
+
+            
+            navigate("/confirm",{ state: { fromSubmit: true } })
+        } catch (error) {
+            console.log(error)
+
+            if(error instanceof ZodError){
+                return alert(error.issues[0].message)
+            }
+
+            if(error instanceof AxiosError){
+                return alert(error.response?.data.message)
+            }
+
+            alert("Não foi possivel realizar a solicitação")
+            
+        } finally{
+            setIsLoading(false)
+        }
+
+        
     }
+    async function fecthRefund(id: string){
+        try {
+            const { data } = await api.get<RefundAPIResponse>(`/refunds/${id}`)
+            setName(data.name)
+            setCategory(data.category)
+            setAmount(formatCurrency(data.amount))
+            
+        } catch (error) {
+            console.log(error)
+
+            if(error instanceof AxiosError){
+                return alert(error.response?.data.message)
+            }
+
+            alert("Não foi possivel carregar")
+            
+        }
+    }
+    useEffect(()=>{
+        if(params.id){
+            fecthRefund(params.id)
+        }
+    },[params.id])
+
     return <form onSubmit={onSubmit} className="bg-gray-500 w-full rounded-xl flex flex-col p-10 gap-6 lg:min-w-[512px]">
         <header>
             <h1 className="text-xl font-bold text-gray-100">Solicitação de reembolso</h1>
@@ -56,18 +136,18 @@ export function Refund(){
             disabled={!!params.id}/>
         </div>
         {
-            params.id ? <a href={`https://www.google.com.br/search?q=${params.id}`} 
+            params.id && fileURL ?( <a href={`https://localhost:3333/uploads/${fileURL}`} 
             className="text-sm text-gray-100 font-semibold flex items-center justify-center gap-2 my-6 hover:opacity-70 transition ease-linear underline" 
             target="_blank">
             <img src={fileSvg} alt="file" className="w-4 mr-2"/>
-                Abrir comprovante</a> : 
+                Abrir comprovante</a> ):( 
             <Upload
-            filename={filename && filename.name}
+            filename={file && file.name}
             required
             disabled={!!params.id}
             accept=".jpg, .jpeg, .png, .pdf"
-            onChange={(e)=> e.target.files && setFilename(e.target.files[0])}
-            />
+            onChange={(e)=> e.target.files && setFile(e.target.files[0])}
+            />)
         }
         
        
